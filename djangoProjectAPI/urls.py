@@ -21,7 +21,13 @@ from flight import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-
+    path('api/login', views.login),
+    path('api/logout', views.logout),
+    path('api/bdd', views.getBDDNames),
+    path('api/<str:bdd>/updateCell', views.updateCell),
+    path('api/<str:bdd>/manageTable', views.manageTable),
+    path('api/<str:bdd>/manageColumn', views.manageColumn),
+    path('api/<str:bdd>/manageRow', views.manageRow),
     path('api/<str:bdd>/allforeignkeys', views.getForeignKeysForAllTables),
     path('api/<str:bdd>/allprimarykeys', views.getPrimaryKeysForAllTables),
     path('api/<str:bdd>/tables', views.getNameTables),
@@ -33,8 +39,8 @@ urlpatterns = [
     path('api/<str:bdd>/<str:table_name>/colonne/<str:column_name>', views.getAllInfoColumn),
     path('api/<str:bdd>/<str:table_name>/ligne/<str:row_id>', views.getRow),
     path('api/<str:bdd>/<str:table_name>/all', views.getAllInfoTable),
-    path('api/<str:bdd>/<str:table_name>/test', views.getTableData),
-    path('api/<str:bdd>/<str:table_name>', views.getInfoTable),
+    path('api/<str:bdd>/<str:table_name>', views.getTableData),
+    # path('api/<str:bdd>/<str:table_name>', views.getInfoTable),
 ]
 
 

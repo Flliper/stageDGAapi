@@ -39,6 +39,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'flight.apps.FlightConfig',
     'corsheaders',
+    'rest_framework',
+    'rest_framework.authtoken',
 ]
 
 MIDDLEWARE = [
@@ -136,3 +138,14 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 SQLITE_DBS = ["northwind", "chinook"]
 ACCESS_DBS = ["northwindAccess"]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',  # primary authentication
+        'rest_framework.authentication.SessionAuthentication',  # optional
+    ],
+}
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+]
