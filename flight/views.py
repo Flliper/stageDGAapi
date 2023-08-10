@@ -10,7 +10,7 @@ import win32com.client
 import pythoncom
 from django.conf import settings
 from rest_framework.authtoken.models import Token
-
+import jwt
 
 from django.contrib.auth import authenticate, login, logout
 from django.http import JsonResponse
@@ -968,6 +968,40 @@ def logout_view(request):
 
 # MODIFICATION DES TABLES
 
+# METHODE POUR VERIFIER L'AUTHENTIFICATION AVEC UN TOKEN JWT
+# def verify_token(request):
+#     auth_header = request.headers.get('Authorization')
+#     if not auth_header:
+#         return False
+#     token = auth_header.split("Bearer ")[1]
+#     try:
+#         decoded_payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+#         return True
+#     except jwt.ExpiredSignatureError:
+#         return False
+#     except jwt.InvalidTokenError:
+#         return False
+
+def verify_token(request):
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return False
+    token_key = auth_header.split("Token ")[1]
+    try:
+        token = Token.objects.get(key=token_key)
+        return True
+    except Token.DoesNotExist:
+        return False
+
+
+TYPE_MAPPING = {
+    "<class 'int'>": "INT",
+    "<class 'str'>": "TEXT",
+    "<class 'float'>": "REAL",
+    "<class 'decimal.Decimal'>": "NUMERIC",
+    "<class 'datetime.date'>": "DATE",
+}
+
 @csrf_exempt
 def updateCellSQLITE(request, bdd):
     if request.method == 'POST':
@@ -1021,6 +1055,8 @@ def updateCellMS(request, bdd):
 
 @csrf_exempt
 def updateCell(request, bdd):
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     if bdd in settings.SQLITE_DBS:
         return updateCellSQLITE(request, bdd)
     elif bdd in settings.ACCESS_DBS:
@@ -1036,6 +1072,7 @@ def manageTableSQLITE(request, bdd):
         operation = data['operation']
         tableName = data['tableName']
         selectedTable = data['selectedTable']
+        newTableName = data['newTableName']
 
         con = sqlite3.connect(f'{bdd}.db')
         cur = con.cursor()
@@ -1043,6 +1080,8 @@ def manageTableSQLITE(request, bdd):
             query = f'CREATE TABLE {tableName} (id INTEGER PRIMARY KEY)'
         elif operation == 'delete':
             query = f'DROP TABLE {selectedTable}'
+        elif operation == 'rename':
+            query = f'ALTER TABLE {selectedTable} RENAME TO {newTableName}'
         else:
             return JsonResponse({'error': 'Invalid operation'}, status=400)
 
@@ -1055,6 +1094,25 @@ def manageTableSQLITE(request, bdd):
         return JsonResponse({'error': 'Invalid request'}, status=400)
 
 
+def rename_table_ms_access(cur, old_table_name, new_table_name):
+    # Étape 1: Récupérez tous les noms de colonnes et leurs types de l'ancienne table
+    cur.execute(f"SELECT * FROM {old_table_name}")
+    columns = [(column[0], TYPE_MAPPING[str(column[1])]) for column in cur.description]
+
+    # Étape 2: Définissez les colonnes pour la création de la nouvelle table
+    column_definitions = ', '.join([f"{name} {type_}" for name, type_ in columns])
+
+    # Étape 3: Créez la nouvelle table avec les mêmes colonnes que l'ancienne table
+    cur.execute(f"CREATE TABLE {new_table_name} ({column_definitions})")
+
+    # Étape 4: Copiez toutes les données de l'ancienne table vers la nouvelle table
+    column_names_only = [name for name, _ in columns]
+    cur.execute(f"INSERT INTO {new_table_name} SELECT {', '.join(column_names_only)} FROM {old_table_name}")
+
+    # Étape 5: Supprimez l'ancienne table
+    cur.execute(f"DROP TABLE {old_table_name}")
+
+
 @csrf_exempt
 def manageTableMS(request, bdd):
     if request.method == 'POST':
@@ -1062,6 +1120,7 @@ def manageTableMS(request, bdd):
         operation = data['operation']
         tableName = data['tableName']
         selectedTable = data['selectedTable']
+        newTableName = data['newTableName']
 
         bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
         conn_str = (
@@ -1073,22 +1132,31 @@ def manageTableMS(request, bdd):
 
         if operation == 'add':
             query = f'CREATE TABLE {tableName} (id COUNTER PRIMARY KEY)'
+            cur.execute(query)
+            con.commit()
         elif operation == 'delete':
             query = f'DROP TABLE {selectedTable}'
+            cur.execute(query)
+            con.commit()
+        elif operation == 'rename':
+            rename_table_ms_access(cur, selectedTable, newTableName)
+            con.commit()
+            con.close()
+            return JsonResponse({'status': 'success'}, status=200)
         else:
             return JsonResponse({'error': 'Invalid operation'}, status=400)
 
-        cur.execute(query)
-        con.commit()
         con.close()
-
         return JsonResponse({'status': 'success'}, status=200)
+
     else:
         return JsonResponse({'error': 'Invalid request'}, status=400)
 
 
 @csrf_exempt
 def manageTable(request, bdd):
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     if bdd in settings.SQLITE_DBS:
         return manageTableSQLITE(request, bdd)
     elif bdd in settings.ACCESS_DBS:
@@ -1105,6 +1173,7 @@ def manageColumnSQLITE(request, bdd):
         columnName = data['columnName']
         selectedColumn = data['selectedColumn']
         selectedTable = data['selectedTable']
+        newColumnName = data['newColumnName']
 
         con = sqlite3.connect(f'{bdd}.db')
         cur = con.cursor()
@@ -1112,6 +1181,8 @@ def manageColumnSQLITE(request, bdd):
             query = f'ALTER TABLE {selectedTable} ADD COLUMN {columnName} TEXT'  # Change type as needed
         elif operation == 'delete':
             query = f'ALTER TABLE {selectedTable} DROP COLUMN {selectedColumn}'
+        elif operation == 'rename':
+            query = f'ALTER TABLE {selectedTable} RENAME COLUMN {selectedColumn} TO {newColumnName}'
         else:
             return JsonResponse({'error': 'Invalid operation'}, status=400)
 
@@ -1124,71 +1195,62 @@ def manageColumnSQLITE(request, bdd):
         return JsonResponse({'error': 'Invalid request'}, status=400)
 
 
-# def drop_column_ms_access(cur, table_name, column_name):
-#     # Step 1: get all column names from the table
-#     cur.execute(f"SELECT * FROM {table_name}")
-#     columns = [column[0] for column in cur.description]
-#
-#     # Step 2: create a new table with the same columns, except the one to be deleted
-#     new_columns = [column for column in columns if column != column_name]
-#     new_table_name = table_name + "_new"
-#     cur.execute(f"CREATE TABLE {new_table_name}"
-#                 f"({', '.join(new_columns)})"
-#                 )
-#
-#     # Step 3: copy all data from the old table to the new table
-#     cur.execute(f"INSERT INTO {new_table_name} SELECT {', '.join(new_columns)} FROM {table_name}")
-#
-#     # Step 4: drop the old table
-#     cur.execute(f"DROP TABLE {table_name}")
-#
-#     # Step 5: rename the new table to the old table's name
-#     cur.execute(f"ALTER TABLE {new_table_name} RENAME TO {table_name}")
-
-# def drop_column_ms_access(cur, table_name, column_name):
-#     # Step 1: get all column names and their types from the table
-#     cur.execute(f"SELECT TOP 1 * FROM [{table_name}]")
-#     columns = [column[0] for column in cur.description]
-#     columns_types = [str(column[1]) for column in cur.description]
-#
-#     if column_name not in columns:
-#         raise ValueError(f"Column {column_name} does not exist in the table")
-#
-#     # Step 2: create a new table with the same columns, except the one to be deleted
-#     new_columns = [f"[{column}] {col_type}" for column, col_type in zip(columns, columns_types) if column != column_name]
-#     new_table_name = table_name + "_new"
-#     cur.execute(f"CREATE TABLE [{new_table_name}] ({', '.join(new_columns)})")
-#
-#     # Step 3: copy all data from the old table to the new table
-#     new_columns_names_only = [column.split()[0] for column in new_columns]  # Get the column names without the types
-#     cur.execute(f"INSERT INTO [{new_table_name}] SELECT {', '.join(new_columns_names_only)} FROM [{table_name}]")
-#
-#     # Step 4: drop the old table
-#     cur.execute(f"DROP TABLE [{table_name}]")
-#
-#     # Step 5: rename the new table to the old table's name
-#     cur.execute(f"ALTER TABLE [{new_table_name}] RENAME TO [{table_name}]")
-
 def drop_column_ms_access(cur, table_name, column_name):
-    # Step 1: get all column names from the table
+    # Step 1: get all column names and their types from the table
     cur.execute(f"SELECT * FROM {table_name}")
-    columns = [column[0] for column in cur.description]
+    columns = [(column[0], TYPE_MAPPING[str(column[1])]) for column in cur.description]
 
-    # Step 2: create a new table with the same columns, except the one to be deleted
-    new_columns = [f"[{column}] TEXT" for column in columns if column != column_name]  # assuming all columns are TEXT
-    new_table_name = table_name + "_new"
-    cur.execute(f"CREATE TABLE {new_table_name} ({', '.join(new_columns)})")
+    # Step 2: create a temporary table with the same columns, except the one to be deleted
+    new_columns = [(name, type_) for name, type_ in columns if name != column_name]
+    column_definitions = ', '.join([f"{name} {type_}" for name, type_ in new_columns])
+    temp_table_name = table_name + "_temp"
+    cur.execute(f"CREATE TABLE {temp_table_name} ({column_definitions})")
 
-    # Step 3: copy all data from the old table to the new table
-    new_columns_names_only = [column.split()[0] for column in new_columns]  # Get the column names without the types
-    cur.execute(f"INSERT INTO {new_table_name} SELECT {', '.join(new_columns_names_only)} FROM {table_name}")
+    # Step 3: copy all data from the original table to the temporary table
+    column_names_only = [name for name, _ in new_columns]
+    cur.execute(f"INSERT INTO {temp_table_name} SELECT {', '.join(column_names_only)} FROM {table_name}")
 
-    # Step 4: drop the old table
+    # Step 4: drop the original table
     cur.execute(f"DROP TABLE {table_name}")
 
-    # Step 5: rename the new table to the old table's name
-    cur.execute(f"ALTER TABLE {new_table_name} RENAME TO {table_name}")
+    # Step 5: recreate the original table with the desired structure
+    cur.execute(f"CREATE TABLE {table_name} ({column_definitions})")
 
+    # Step 6: copy all data from the temporary table to the original table
+    cur.execute(f"INSERT INTO {table_name} SELECT {', '.join(column_names_only)} FROM {temp_table_name}")
+
+    # Step 7: drop the temporary table
+    cur.execute(f"DROP TABLE {temp_table_name}")
+
+
+def rename_column_ms_access(cur, table_name, old_column_name, new_column_name):
+    # Étape 1 : Récupérez tous les noms de colonnes et leurs types de la table
+    cur.execute(f"SELECT * FROM {table_name}")
+    columns = [(column[0], TYPE_MAPPING[str(column[1])]) for column in cur.description]
+
+    # Étape 2 : Créez une liste de nouvelles colonnes, renommez la colonne spécifiée
+    new_columns = [(new_column_name if name == old_column_name else name, type_) for name, type_ in columns]
+    column_definitions = ', '.join([f"{name} {type_}" for name, type_ in new_columns])
+
+    temp_table_name = table_name + "_temp"
+    cur.execute(f"CREATE TABLE {temp_table_name} ({column_definitions})")
+
+    # Étape 3 : Copiez toutes les données de la table d'origine vers la table temporaire
+    old_column_names_only = [name for name, _ in columns]
+    new_column_names_only = [new_column_name if name == old_column_name else name for name in old_column_names_only]
+    cur.execute(f"INSERT INTO {temp_table_name} ({', '.join(new_column_names_only)}) SELECT {', '.join(old_column_names_only)} FROM {table_name}")
+
+    # Étape 4 : Supprimez la table d'origine
+    cur.execute(f"DROP TABLE {table_name}")
+
+    # Étape 5 : Recréez la table d'origine avec la colonne renommée
+    cur.execute(f"CREATE TABLE {table_name} ({column_definitions})")
+
+    # Étape 6 : Copiez toutes les données de la table temporaire vers la table d'origine
+    cur.execute(f"INSERT INTO {table_name} SELECT {', '.join(new_column_names_only)} FROM {temp_table_name}")
+
+    # Étape 7 : Supprimez la table temporaire
+    cur.execute(f"DROP TABLE {temp_table_name}")
 
 
 
@@ -1200,6 +1262,7 @@ def manageColumnMS(request, bdd):
         columnName = data['columnName']
         selectedColumn = data['selectedColumn']
         selectedTable = data['selectedTable']
+        newColumnName = data['newColumnName']
 
         bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
         conn_str = (
@@ -1211,22 +1274,33 @@ def manageColumnMS(request, bdd):
 
         if operation == 'add':
             query = f'ALTER TABLE {selectedTable} ADD COLUMN {columnName} TEXT'  # Change type as needed
+            cur.execute(query)
+            con.commit()
         elif operation == 'delete':
-            return drop_column_ms_access(cur, selectedTable, selectedColumn)
+            drop_column_ms_access(cur, selectedTable, selectedColumn)
+            con.commit()
+            con.close()
+            return JsonResponse({'status': 'success'}, status=200)
+        elif operation == 'rename':
+            rename_column_ms_access(cur, selectedTable, selectedColumn, newColumnName)
+            con.commit()
+            con.close()
+            return JsonResponse({'status': 'success'}, status=200)
         else:
+            con.close()
             return JsonResponse({'error': 'Invalid operation'}, status=400)
 
-        cur.execute(query)
-        con.commit()
         con.close()
-
         return JsonResponse({'status': 'success'}, status=200)
     else:
         return JsonResponse({'error': 'Invalid request'}, status=400)
 
 
+
 @csrf_exempt
 def manageColumn(request, bdd):
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     if bdd in settings.SQLITE_DBS:
         return manageColumnSQLITE(request, bdd)
     elif bdd in settings.ACCESS_DBS:
@@ -1308,6 +1382,8 @@ def manageRowMS(request, bdd):
 
 @csrf_exempt
 def manageRow(request, bdd):
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
     if bdd in settings.SQLITE_DBS:
         return manageRowSQLite(request, bdd)
     elif bdd in settings.ACCESS_DBS:
