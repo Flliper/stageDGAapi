@@ -15,28 +15,50 @@ import jwt
 from django.contrib.auth import authenticate, login, logout
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework.response import Response
+from rest_framework import status
+
+
+from .serializers import UserSerializer
+
 
 # FONCTIONS POUR SQLITE
 
 
 def getNameTablesSQLITE(request, bdd):
+    # Établissement d'une connexion à la base de données SQLite avec le nom donné.
     con = sqlite3.connect(f'{bdd}.db')
+
+    # Création d'un curseur pour exécuter des requêtes SQL.
     cur = con.cursor()
+
+    # Exécution de la requête SQL pour obtenir les noms des tables dans la base de données.
     cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+
+    # Récupération de tous les résultats de la requête précédente.
     resultats = cur.fetchall()
+
+    # Fermeture de la connexion à la base de données.
     con.close()
 
+    # Retour des résultats sous forme de JsonResponse.
     return JsonResponse(resultats, safe=False)
 
 
 def getAllInfoTableSQLITE(request, table_name, bdd):
+    # Décode l'encodage de la URL pour obtenir le nom de la table correct.
+    # Par exemple, convertit "%20" en espace.
     table_name = urllib.parse.unquote(table_name)
+
     con = sqlite3.connect(f'{bdd}.db')
     cur = con.cursor()
+
+    # Exécution de la requête SQL pour obtenir toutes les informations de la table spécifiée.
+    # On utilise des guillemets doubles autour du nom de la table pour gérer les cas où le nom contient des espaces ou d'autres caractères spéciaux.
     cur.execute(f'SELECT * FROM "{table_name}"')
+
     resultats = cur.fetchall()
     con.close()
-
     return JsonResponse(resultats, safe=False)
 
 
@@ -68,10 +90,12 @@ def getAllInfoColumnSQLITE(request, bdd, table_name, column_name):
 def getCountSQLITE(request, bdd, table_name):
     table_name = urllib.parse.unquote(table_name)
 
+    # Récupération du filtre en tant que chaîne JSON depuis la requête GET, et par défaut un objet vide.
     filter_json = request.GET.get('filter', '{}')
+    # Conversion de la chaîne JSON en dictionnaire.
     filters = json.loads(filter_json)
 
-    # Ajouter les nouveaux paramètres
+    # Récupération des nouveaux paramètres (nom de colonne et valeur) depuis la requête GET.
     column_name = request.GET.get('columnName', None)
     column_value = request.GET.get('columnValue', None)
 
@@ -289,6 +313,17 @@ def getTableDataSQLITE(request, bdd, table_name):
     return JsonResponse(resultats, safe=False)
 
 
+def getNotNullColumnSQLITE(request, bdd, table_name):
+    con = sqlite3.connect(f'{bdd}.db')
+    cur = con.cursor()
+
+    cur.execute(f"PRAGMA table_info('{table_name}')")
+    columns = cur.fetchall()
+
+    not_null_columns = [col[1] for col in columns if col[3] == 1]
+    con.close()
+
+    return JsonResponse({'not_null_columns': not_null_columns})
 
 
 
@@ -332,17 +367,23 @@ def check_or_grant_permissions(request, bdd):
 
 
 def getNameTablesMS(request, bdd):
-    bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')  # Obtenir le chemin absolu de la BDD
+    # Obtenir le chemin absolu de la base de données en utilisant le nom de la BDD
+    bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
 
+    # Établir une connexion à la base de données Microsoft Access en utilisant pyodbc
     con = pyodbc.connect(
-        r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
-        r'DBQ=' + bdd_path + ';'
+        r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'  # Utilise le pilote ODBC pour Microsoft Access
+        r'DBQ=' + bdd_path + ';'  # Spécifie le chemin de la base de données à connecter
     )
-    cur = con.cursor()
+    cur = con.cursor()  # Créer un curseur pour exécuter des requêtes
 
+    # Récupérer tous les noms de tables de la base de données
+    # en excluant les tables système (commençant par "MSys")
     table_names = [[table.table_name] for table in cur.tables(tableType='TABLE') if not table.table_name.startswith('MSys')]
-    con.close()
 
+    con.close()  # Fermer la connexion à la base de données
+
+    # Retourner les noms de tables sous forme de réponse JSON
     return JsonResponse(table_names, safe=False)
 
 
@@ -350,7 +391,9 @@ def getNameTablesMS(request, bdd):
 def getAllInfoTableMS(request, table_name, bdd):
     bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')  # Obtenir le chemin absolu de la BDD
 
+    # Décoder les caractères spéciaux du nom de la table
     table_name = urllib.parse.unquote(table_name)
+
     conn_str = (
         r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
         r'DBQ=' + bdd_path + ';'
@@ -358,8 +401,13 @@ def getAllInfoTableMS(request, table_name, bdd):
     conn = pyodbc.connect(conn_str)
     cursor = conn.cursor()
     cursor.execute(f'SELECT * FROM [{table_name}]')
+
+    # Convertir chaque ligne des résultats en un dictionnaire où les clés sont les noms des colonnes
+    # et les valeurs sont les valeurs de chaque ligne.
+    # cursor.description contient les détails de chaque colonne (nom, type, etc.).
     resultats = [dict(zip([column[0] for column in cursor.description], row))
                  for row in cursor.fetchall()]
+
     conn.close()
 
     return JsonResponse(resultats, safe=False)
@@ -539,116 +587,40 @@ def getRowMS(request, bdd, table_name, row_id):
     return JsonResponse(resultat_list, safe=False) if resultat is not None else JsonResponse({'error': 'Data not found'}, safe=False)
 
 
-
-# def getPrimaryKeyMS(request, bdd, table_name):
-#     check_or_grant_permissions(request, bdd)
-#     table_name = urllib.parse.unquote(table_name)
-#
-#     bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
-#     conn_str = (
-#         r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
-#         r'DBQ=' + bdd_path + ';'
-#     )
-#
-#     conn = pyodbc.connect(conn_str)
-#     cursor = conn.cursor()
-#
-#     # Query the system table MSysObjects to find the primary key
-#     cursor.execute(f"""
-#         SELECT MSysObjects.Name
-#         FROM MSysObjects INNER JOIN MSysRelationships ON MSysObjects.Id = MSysRelationships.PrimaryTableId
-#         WHERE (((MSysObjects.Name)="{table_name}") AND ((MSysObjects.Type)=1) AND ((MSysRelationships.JoinType)=1));
-#     """)
-#
-#     primary_key_row = cursor.fetchone()
-#     primary_key = primary_key_row.Name if primary_key_row else None
-#
-#     conn.close()
-#
-#     return JsonResponse({'primaryKey': primary_key}) if primary_key is not None else JsonResponse({'error': 'Primary key not found'}, safe=False)
-#
-
-# def getPrimaryKeyMS(request, bdd, table_name):
-#     # check_or_grant_permissions(request, bdd)
-#     table_name = urllib.parse.unquote(table_name)
-#
-#     bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
-#     conn_str = (
-#         r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
-#         r'DBQ=' + bdd_path + ';'
-#     )
-#
-#     conn = pyodbc.connect(conn_str)
-#     cursor = conn.cursor()
-#
-#     # Use pyodbc's built-in method to get primary key info
-#     primary_keys = cursor.primaryKeys(table=table_name)
-#
-#     primary_key = None
-#     for row in primary_keys:
-#         primary_key = row.column_name
-#         break  # Only get the first primary key (if there are multiple)
-#
-#     conn.close()
-#
-#     return JsonResponse({'primaryKey': primary_key}) if primary_key is not None else JsonResponse({'error': 'Primary key not found'}, safe=False)
-
-
-# def getPrimaryKeyMS(request, bdd, table_name):
-#     # check_or_grant_permissions(request, bdd)
-#     table_name = urllib.parse.unquote(table_name)
-#
-#     bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
-#     conn_str = (
-#         'Provider=Microsoft.ACE.OLEDB.12.0;'
-#         'Data Source=' + bdd_path + ';'
-#     )
-#
-#     conn = adodbapi.connect(conn_str)
-#
-#     schema = conn.getSchema('COLUMNS')
-#     primary_key_row = schema[schema['TABLE_NAME'] == table_name]
-#     primary_key = primary_key_row['COLUMN_NAME'].values[0]
-#
-#     conn.close()
-#
-#     return JsonResponse({'primaryKey': primary_key}) if primary_key is not None else JsonResponse({'error': 'Primary key not found'}, safe=False)
-
-
-# def getPrimaryKeyMS(request, bdd, table_name):
-#     table_name = urllib.parse.unquote(table_name)
-#     bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
-#
-#     db_engine = win32com.client.Dispatch("DAO.DBEngine.120")
-#     db = db_engine.OpenDatabase(bdd_path)
-#     tbd = db.TableDefs(table_name)
-#
-#     primary_key = None
-#     for idx in tbd.Indexes:
-#         if idx.Primary:
-#             primary_key = [fld.Name for fld in idx.Fields]
-#
-#     return JsonResponse({'primaryKey': primary_key}) if primary_key is not None else JsonResponse({'error': 'Primary key not found'}, safe=False)
-#
-
+# fonction utilise les modules pythoncom et win32com.client pour interagir avec les bases de données Microsoft Access via leur interface COM
 def getPrimaryKeyMS(request, bdd, table_name):
+    # Initialiser le module pythoncom pour permettre l'interaction avec les objets COM sous Windows.
     pythoncom.CoInitialize()
 
     try:
+        # Décoder les caractères spéciaux du nom de la table
         table_name = urllib.parse.unquote(table_name)
+
+        # Obtenir le chemin absolu de la base de données en utilisant le nom de la BDD
         bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
 
+        # Initialiser l'objet DAO.DBEngine pour interagir avec les bases de données Microsoft Access
         db_engine = win32com.client.Dispatch("DAO.DBEngine.120")
+
+        # Ouvrir la base de données avec le chemin spécifié
         db = db_engine.OpenDatabase(bdd_path)
+
+        # Obtenir les définitions de la table à partir de son nom
         tbd = db.TableDefs(table_name)
 
         primary_key = None
+        # Parcourir tous les index de la table
         for idx in tbd.Indexes:
+            # Si l'index est identifié comme clé primaire
             if idx.Primary:
+                # Obtenir le ou les noms des champs constituant la clé primaire
                 primary_key = [fld.Name for fld in idx.Fields]
+                break  # On sort de la boucle une fois la clé primaire trouvée
     finally:
+        # Désinitialiser le module pythoncom pour libérer les ressources utilisées par les objets COM.
         pythoncom.CoUninitialize()
 
+    # Si une clé primaire a été trouvée, renvoyer cette clé, sinon renvoyer une erreur.
     return JsonResponse({'primaryKey': primary_key}) if primary_key is not None else JsonResponse(
         {'error': 'Primary key not found'}, safe=False)
 
@@ -656,23 +628,42 @@ def getPrimaryKeyMS(request, bdd, table_name):
 def getForeignKeysMS(request, bdd, table_name):
     pythoncom.CoInitialize()
 
+    # Initialiser une liste vide pour stocker les clés étrangères trouvées.
     foreign_keys = []
+
     try:
+        # Décoder les caractères spéciaux du nom de la table.
         table_name = urllib.parse.unquote(table_name)
+
+        # Obtenir le chemin absolu de la base de données à partir du nom de la BDD.
         bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
 
+        # Initialiser l'objet DAO.DBEngine pour interagir avec les bases de données Microsoft Access.
         db_engine = win32com.client.Dispatch("DAO.DBEngine.120")
+
+        # Ouvrir la base de données avec le chemin spécifié.
         db = db_engine.OpenDatabase(bdd_path)
+
+        # Obtenir les définitions de la table à partir de son nom.
         tbd = db.TableDefs(table_name)
 
+        # Parcourir toutes les relations (liens entre tables) de la base de données.
         for rel in db.Relations:
+            # Si la table de la relation actuelle est la table spécifiée.
             if rel.Table == table_name:
+                # Ajouter les détails de la clé étrangère à la liste :
+                # - Le nom de la table liée (table étrangère).
+                # - Le nom du champ dans la table actuelle.
+                # - Le nom du champ correspondant dans la table liée.
                 foreign_keys.append([rel.ForeignTable, rel.Fields.Item(0).Name, rel.Fields.Item(0).ForeignName])
 
     finally:
+        # Désinitialiser le module pythoncom pour libérer les ressources utilisées par les objets COM.
         pythoncom.CoUninitialize()
 
+    # Renvoyer les clés étrangères sous forme de réponse JSON.
     return JsonResponse(foreign_keys, safe=False)
+
 
 
 
@@ -781,7 +772,22 @@ def getTableDataMS(request, bdd, table_name):
     return JsonResponse(resultats, safe=False)
 
 
+def getNotNullColumnMS(request, bdd, table_name):
+    bdd_path = os.path.join(os.getcwd(), f'{bdd}.accdb')
+    conn_str = (
+        r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+        r'DBQ=' + bdd_path + ';'
+    )
 
+    conn = pyodbc.connect(conn_str)
+    cursor = conn.cursor()
+
+    columns = cursor.columns(table=table_name).fetchall()
+    not_null_columns = [col.column_name for col in columns if col.nullable == 0]
+
+    conn.close()
+
+    return JsonResponse({'not_null_columns': not_null_columns})
 
 
 
@@ -803,12 +809,21 @@ def getTableDataMS(request, bdd, table_name):
 
 
 def getNameTables(request, bdd):
+    # Vérifier si le nom de la base de données donné (bdd) figure dans la liste des bases de données SQLite définies dans le fichier settings.py.
     if bdd in settings.SQLITE_DBS:
+        # Si c'est le cas, appeler la fonction qui traite les bases de données SQLite pour obtenir les noms des tables.
         return getNameTablesSQLITE(request, bdd)
+
+    # Vérifier si le nom de la base de données donné (bdd) figure dans la liste des bases de données Microsoft Access définies dans les paramètres.
     elif bdd in settings.ACCESS_DBS:
+        # Si c'est le cas, appeler la fonction qui traite les bases de données Microsoft Access pour obtenir les noms des tables.
         return getNameTablesMS(request, bdd)
+
+    # Si la base de données n'est ni de type SQLite ni de type Microsoft Access.
     else:
+        # Renvoyer une réponse d'erreur indiquant un type de base de données non valide.
         return JsonResponse({'error': 'Invalid database type'}, safe=False)
+
 
 def getAllInfoTable(request, table_name, bdd):
     if bdd in settings.SQLITE_DBS:
@@ -898,6 +913,7 @@ def getPrimaryKeysForAllTables(request, bdd):
     else:
         return JsonResponse({'error': 'Invalid database type'}, safe=False)
 
+
 def getTableData(request, bdd, table_name):
     if bdd in settings.SQLITE_DBS:
         return getTableDataSQLITE(request, bdd, table_name)
@@ -907,12 +923,15 @@ def getTableData(request, bdd, table_name):
         return JsonResponse({'error': 'Invalid database type'}, safe=False)
 
 
+def getNotNullColumns(request, bdd, table_name):
+    table_name = urllib.parse.unquote(table_name)
 
-
-
-
-
-
+    if bdd in settings.SQLITE_DBS:
+        return getNotNullColumnSQLITE(request, bdd, table_name)
+    elif bdd in settings.ACCESS_DBS:
+        return getNotNullColumnMS(request, bdd, table_name)
+    else:
+        return JsonResponse({'error': 'Invalid database type'}, safe=False)
 
 
 ## RECUPERER LES NOMS DES BDD
@@ -926,19 +945,38 @@ def getBDDNames(request):
 
 # AUTHENTIFICATION ET AUTORISATION
 
+# Désactive le middleware CSRF pour cette vue. Ceci est nécessaire lors de la création d'API REST.
+# Néanmoins, cela peut présenter des risques de sécurité si ce n'est pas géré correctement.
 @csrf_exempt
 def login(request):
+    # Vérifie si la requête est de type POST. La connexion doit généralement être effectuée avec une requête POST.
     if request.method == 'POST':
+
+        # La requête POST contient des données sous forme JSON. Ces données sont converties en dictionnaire python.
         data = json.loads(request.body)
+
+        # Récupère le nom d'utilisateur et le mot de passe de la requête.
         username = data.get('username')
         password = data.get('password')
+
+        # `authenticate` est une fonction Django qui vérifie si le nom d'utilisateur et le mot de passe sont corrects.
         user = authenticate(username=username, password=password)
 
+        # Si l'utilisateur est authentifié avec succès.
         if user is not None:
+
+            # Récupère ou crée un token pour cet utilisateur.
+            # Le token est souvent utilisé pour authentifier l'utilisateur pour les requêtes futures.
             token, created = Token.objects.get_or_create(user=user)
+
+            # Renvoie une réponse JSON indiquant le succès de la connexion, le nom d'utilisateur et le token.
             return JsonResponse({'status': 'success', 'user': username, 'token': token.key})
+
+        # Si l'authentification échoue, renvoie une erreur.
         else:
             return JsonResponse({'status': 'error', 'error': 'Invalid login credentials'})
+
+    # Si la requête n'est pas de type POST, renvoie une erreur.
     else:
         return JsonResponse({'status': 'error', 'error': 'Invalid request method'})
 
@@ -948,52 +986,93 @@ def logout_view(request):
     logout(request)
     return JsonResponse({"detail": "Success"})
 
-# @csrf_exempt
-# def logout_view(request):
-#     # Get the token from the headers
-#     token_header = request.META.get('HTTP_AUTHORIZATION', '').split()
-#     if len(token_header) != 2 or token_header[0] != 'Token':
-#         return JsonResponse({"detail": "Invalid token"}, status=403)
-#     token = token_header[1]
-#
-#     # Delete the token if it exists
-#     try:
-#         token_obj = Token.objects.get(key=token)
-#         user = User.objects.get(id=token_obj.user_id)
-#         user.auth_token.delete()
-#         return JsonResponse({"detail": "Success"})
-#     except (Token.DoesNotExist, User.DoesNotExist):
-#         return JsonResponse({"detail": "Invalid token"}, status=403)
 
 
-# MODIFICATION DES TABLES
+@csrf_exempt
+def signup(request):
+    # La fonction `verify_token` est appelée pour vérifier le token de l'utilisateur.
+    # Si le token est invalide ou manquant, une réponse d'erreur est renvoyée.
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
 
-# METHODE POUR VERIFIER L'AUTHENTIFICATION AVEC UN TOKEN JWT
-# def verify_token(request):
-#     auth_header = request.headers.get('Authorization')
-#     if not auth_header:
-#         return False
-#     token = auth_header.split("Bearer ")[1]
-#     try:
-#         decoded_payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-#         return True
-#     except jwt.ExpiredSignatureError:
-#         return False
-#     except jwt.InvalidTokenError:
-#         return False
+    # Vérifier si la requête est de type POST. Les inscriptions doivent généralement être effectuées avec une requête POST.
+    if request.method == 'POST':
+
+        # La requête POST contient des données sous forme JSON.
+        # Ces données sont décodées et converties en dictionnaire python.
+        data = json.loads(request.body.decode('utf-8'))
+
+        # `UserSerializer` est probablement un sérialiseur Django Rest Framework (DRF)
+        # qui valide les données d'un utilisateur et les prépare pour la sauvegarde.
+        serializer = UserSerializer(data=data)
+
+        # Vérifie si les données fournies sont valides.
+        if serializer.is_valid():
+            # Si les données sont valides, elles sont sauvegardées en base de données.
+            serializer.save()
+
+            # Renvoie une réponse JSON avec les données sérialisées et un code de statut 201, indiquant que la création a réussi.
+            return JsonResponse(serializer.data, status=201)
+
+        # Si les données ne sont pas valides, renvoie une réponse JSON avec les erreurs et un code de statut 400.
+        return JsonResponse(serializer.errors, status=400)
+
+
+@csrf_exempt
+def manageUser(request):
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    if request.method == 'POST':
+        data = json.loads(request.body.decode('utf-8'))
+        action = data.get("action", "")
+
+        if action == "add":
+            user_data = {k: v for k, v in data.items() if k in ["username", "email", "password"]}
+            serializer = UserSerializer(data=user_data)
+            if serializer.is_valid():
+                serializer.save()
+                return JsonResponse(serializer.data, status=201)
+            return JsonResponse(serializer.errors, status=400)
+
+        elif action == "delete":
+            username_to_delete = data.get("usernameToDelete", "")
+            try:
+                user = User.objects.get(username=username_to_delete)
+                print(user)
+                user.delete()
+                return JsonResponse({"status": "success"}, status=200)
+            except User.DoesNotExist:
+                return JsonResponse({"error": "User not found"}, status=404)
+
+        else:
+            return JsonResponse({"error": "Invalid action"}, status=400)
+
 
 def verify_token(request):
+    # Récupère le champ 'Authorization' de l'en-tête de la requête.
     auth_header = request.headers.get('Authorization')
+
+    # Si l'en-tête 'Authorization' est manquant, renvoie False.
     if not auth_header:
         return False
+
+    # Essaye de séparer le mot "Token" du token réel. Cela suppose que l'en-tête est formaté comme "Token <votre_token>".
     token_key = auth_header.split("Token ")[1]
+
     try:
+        # Essaye de récupérer un objet Token correspondant à partir de la base de données.
         token = Token.objects.get(key=token_key)
+
+        # Si le token existe dans la base de données, renvoie True.
         return True
     except Token.DoesNotExist:
+        # Si aucun token correspondant n'est trouvé, renvoie False.
         return False
 
 
+# Carte qui associe des représentations sous forme de chaînes de caractères de types Python à
+# leurs équivalents dans une base de données SQL
 TYPE_MAPPING = {
     "<class 'int'>": "INT",
     "<class 'str'>": "TEXT",

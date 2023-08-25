@@ -22,6 +22,8 @@ from flight import views
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/login', views.login),
+    # path('api/signup', views.signup),
+    path('api/signup', views.manageUser),
     path('api/logout', views.logout),
     path('api/bdd', views.getBDDNames),
     path('api/<str:bdd>/updateCell', views.updateCell),
@@ -32,6 +34,7 @@ urlpatterns = [
     path('api/<str:bdd>/allprimarykeys', views.getPrimaryKeysForAllTables),
     path('api/<str:bdd>/tables', views.getNameTables),
     path('api/<str:bdd>/<str:table_name>/colonnes', views.getNameColumns),
+    path('api/<str:bdd>/<str:table_name>/notNullColonnes', views.getNotNullColumns),
     path('api/<str:bdd>/<str:table_name>/count', views.getCount),
     path('api/<str:bdd>/<str:table_name>/primarykey', views.getPrimaryKey),
     path('api/<str:bdd>/<str:table_name>/foreignkeys', views.getForeignKeys),
